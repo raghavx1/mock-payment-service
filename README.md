@@ -15,10 +15,10 @@ When a client (frontend or another microservice) sends a payment request, it mus
 2. **Layer 2 (PostgreSQL Fallback):** If Redis is down, times out, or evicts the key, the service gracefully degrades. It queries Postgres for the idempotency key. If found, it returns the existing record. If not, it processes a new payment.
 3. **Database Constraint:** A unique constraint on the `idempotency_key` column in Postgres acts as the final safety net against race conditions.
 
-## Lessons Learned: Java 17 Records vs. Spring Magic
-While building this, I ran into a classic serialization trap. Spring's default `GenericJackson2JsonRedisSerializer` tries to be clever, but it completely breaks when trying to deserialize into Java 17 `record` types because they are immutable and `final`. It would silently fall back to parsing the JSON into a generic `Map`, bypassing the cache entirely. 
+## Architecture Decisions & Trade-offs
 
-**The Fix:** I stripped out the framework magic, switched to `StringRedisSerializer`, and manually serialized/deserialized the payloads using a custom `ObjectMapper` with the `JavaTimeModule` enabled. Explicit control > implicit magic.
+* **Explicit Serialization over Framework Defaults:** Spring Data's default `GenericJackson2JsonRedisSerializer` relies heavily on reflection. This introduces silent failure modes when deserializing into modern Java 17 immutable `record` types, often falling back to a generic `Map` and causing silent cache misses. To guarantee type safety and predictability, this service completely bypasses the default abstraction. Cache payloads are manually serialized to raw JSON strings using a strictly configured `ObjectMapper` (with `JavaTimeModule` for ISO-8601 compliance) and stored via `StringRedisSerializer`. Explicit control is prioritized over implicit framework magic.
+* **Database as the Ultimate Source of Truth:** While Redis handles 99% of idempotency checks at sub-millisecond latency, cache evictions or Redis outages must not compromise transaction integrity. The `idempotency_key` column in PostgreSQL enforces a strict `UNIQUE` constraint at the disk level, acting as the final barrier against race conditions and double-charges.
 
 ## How to Run Locally
 
